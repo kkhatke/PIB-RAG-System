@@ -1,0 +1,14 @@
+# Core dependencies
+langchain==0.1.0
+langchain-community==0.0.10
+chromadb==0.4.22
+sentence-transformers==2.3.1
+ollama==0.1.6
+
+# Testing dependencies
+hypothesis==6.98.0
+pytest==7.4.4
+pytest-cov==4.1.0
+
+# Utility dependencies
+python-dotenv==1.0.0
