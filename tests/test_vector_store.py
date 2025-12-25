@@ -15,7 +15,7 @@ from src.embedding.embedding_generator import EmbeddingGenerator
 
 
 # Test fixtures
-@pytest.fixture
+@pytest.fixture(scope="session")
 def temp_vector_store():
     """Create a temporary vector store for testing."""
     temp_dir = tempfile.mkdtemp()
@@ -25,7 +25,7 @@ def temp_vector_store():
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def embedding_generator():
     """Create an embedding generator for testing."""
     return EmbeddingGenerator()

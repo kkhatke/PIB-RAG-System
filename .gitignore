@@ -81,6 +81,7 @@ data/test_*.json
 # Model cache
 .cache/
 models/
+model_cache/
 
 # Documentation builds
 docs/_build/

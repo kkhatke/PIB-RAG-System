@@ -15,7 +15,7 @@ from src.data_ingestion.article_chunker import Chunk
 
 
 # Test fixtures
-@pytest.fixture
+@pytest.fixture(scope="session")
 def temp_vector_store():
     """Create a temporary vector store for testing."""
     temp_dir = tempfile.mkdtemp()
@@ -24,13 +24,13 @@ def temp_vector_store():
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def embedding_generator():
     """Create an embedding generator for testing."""
     return EmbeddingGenerator()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def query_engine(temp_vector_store, embedding_generator):
     """Create a query engine for testing."""
     return QueryEngine(temp_vector_store, embedding_generator)
@@ -876,6 +876,258 @@ def test_property_31_top_k_context_limitation(query_text, top_k, num_chunks, emb
         # Verify we got at most top_k results
         assert len(results) <= top_k, \
             f"Got {len(results)} results, expected at most {top_k}"
+    
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Property 40: Configurable article count
+# Feature: pib-rag-system, Property 40: Configurable article count
+@settings(max_examples=100, deadline=3000)
+@given(
+    query_text=st.text(min_size=10, max_size=100),
+    max_articles=st.integers(min_value=1, max_value=15),
+    num_chunks=st.integers(min_value=20, max_value=30)
+)
+def test_property_40_configurable_article_count(query_text, max_articles, num_chunks, embedding_generator):
+    """
+    Property 40: Configurable article count
+    For any search query with a specified maximum article count, the system should return 
+    at most that many articles.
+    Validates: Requirements 13.1
+    """
+    # Ensure we have more chunks than max_articles
+    assume(num_chunks > max_articles)
+    
+    temp_dir = tempfile.mkdtemp()
+    try:
+        store = VectorStore(persist_directory=temp_dir, collection_name="test_prop40")
+        query_engine = QueryEngine(store, embedding_generator)
+        
+        # Create chunks
+        chunks = []
+        for i in range(num_chunks):
+            chunk = Chunk(
+                chunk_id=f"chunk_{i}",
+                article_id=f"art_{i}",
+                content=f"Content about policy {i}",
+                metadata={
+                    'date': '2025-01-01',
+                    'ministry': "Ministry of Health",
+                    'title': f"Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Generate embeddings and add to store
+        embeddings = embedding_generator.batch_generate_embeddings([c.content for c in chunks])
+        store.add_chunks(chunks, embeddings)
+        
+        # Search with max_articles limit
+        results = query_engine.search(
+            query=query_text,
+            max_articles=max_articles,
+            relevance_threshold=0.0
+        )
+        
+        # Verify we got at most max_articles results
+        assert len(results) <= max_articles, \
+            f"Got {len(results)} results, expected at most {max_articles}"
+    
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Property 41: Time period filter accuracy
+# Feature: pib-rag-system, Property 41: Time period filter accuracy
+@settings(max_examples=100, deadline=3000)
+@given(
+    query_text=st.text(min_size=10, max_size=100),
+    time_period=st.sampled_from(["1_year", "6_months", "3_months"])
+)
+def test_property_41_time_period_filter_accuracy(query_text, time_period, embedding_generator):
+    """
+    Property 41: Time period filter accuracy
+    For any search query with a time period filter (1 year, 6 months, 3 months), all returned 
+    articles should have dates within that period from the current date.
+    Validates: Requirements 13.2, 13.3, 13.4
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+        store = VectorStore(persist_directory=temp_dir, collection_name="test_prop41")
+        query_engine = QueryEngine(store, embedding_generator)
+        
+        # Calculate expected date range for the time period
+        today = datetime.now().date()
+        if time_period == "1_year":
+            expected_start = today - timedelta(days=365)
+        elif time_period == "6_months":
+            expected_start = today - timedelta(days=180)
+        elif time_period == "3_months":
+            expected_start = today - timedelta(days=90)
+        
+        expected_end = today
+        
+        # Create chunks with dates inside and outside the time period
+        chunks = []
+        
+        # Chunks inside the time period
+        for i in range(5):
+            days_back = i * (365 // 10) if time_period == "1_year" else i * (180 // 10) if time_period == "6_months" else i * (90 // 10)
+            date = (today - timedelta(days=days_back)).isoformat()
+            chunk = Chunk(
+                chunk_id=f"inside_{i}",
+                article_id=f"art_inside_{i}",
+                content=f"Content inside {time_period} period {i}",
+                metadata={
+                    'date': date,
+                    'ministry': "Ministry of Health",
+                    'title': f"Inside Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Chunks outside the time period (too old)
+        for i in range(3):
+            days_back = 400 if time_period == "1_year" else 200 if time_period == "6_months" else 100
+            date = (today - timedelta(days=days_back + i)).isoformat()
+            chunk = Chunk(
+                chunk_id=f"outside_{i}",
+                article_id=f"art_outside_{i}",
+                content=f"Content outside {time_period} period {i}",
+                metadata={
+                    'date': date,
+                    'ministry': "Ministry of Health",
+                    'title': f"Outside Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Generate embeddings and add to store
+        embeddings = embedding_generator.batch_generate_embeddings([c.content for c in chunks])
+        store.add_chunks(chunks, embeddings)
+        
+        # Search with time period filter
+        results = query_engine.search(
+            query=query_text,
+            time_period=time_period,
+            max_articles=20,
+            relevance_threshold=0.0
+        )
+        
+        # Verify all results are within the expected time period
+        for result in results:
+            result_date = datetime.fromisoformat(result.chunk.metadata['date']).date()
+            assert expected_start <= result_date <= expected_end, \
+                f"Result date {result_date} not in {time_period} range [{expected_start}, {expected_end}]"
+    
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# Property 42: Custom date range filtering
+# Feature: pib-rag-system, Property 42: Custom date range filtering
+@settings(max_examples=100, deadline=3000)
+@given(
+    query_text=st.text(min_size=10, max_size=100),
+    days_back_start=st.integers(min_value=60, max_value=180),
+    days_back_end=st.integers(min_value=10, max_value=59)
+)
+def test_property_42_custom_date_range_filtering(query_text, days_back_start, days_back_end, embedding_generator):
+    """
+    Property 42: Custom date range filtering
+    For any search query with a custom date range, all returned articles should have dates 
+    within the specified start and end dates (inclusive).
+    Validates: Requirements 13.5
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+        store = VectorStore(persist_directory=temp_dir, collection_name="test_prop42")
+        query_engine = QueryEngine(store, embedding_generator)
+        
+        # Define custom date range
+        today = datetime.now().date()
+        start_date = today - timedelta(days=days_back_start)
+        end_date = today - timedelta(days=days_back_end)
+        
+        # Create chunks with dates inside and outside the custom range
+        chunks = []
+        
+        # Chunks inside the custom date range
+        for i in range(5):
+            days_offset = i * ((days_back_start - days_back_end) // 5)
+            date = (start_date + timedelta(days=days_offset)).isoformat()
+            chunk = Chunk(
+                chunk_id=f"inside_{i}",
+                article_id=f"art_inside_{i}",
+                content=f"Content inside custom range {i}",
+                metadata={
+                    'date': date,
+                    'ministry': "Ministry of Health",
+                    'title': f"Inside Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Chunks outside the custom date range (before start_date)
+        for i in range(3):
+            date = (start_date - timedelta(days=i+1)).isoformat()
+            chunk = Chunk(
+                chunk_id=f"before_{i}",
+                article_id=f"art_before_{i}",
+                content=f"Content before custom range {i}",
+                metadata={
+                    'date': date,
+                    'ministry': "Ministry of Health",
+                    'title': f"Before Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Chunks outside the custom date range (after end_date)
+        for i in range(3):
+            date = (end_date + timedelta(days=i+1)).isoformat()
+            chunk = Chunk(
+                chunk_id=f"after_{i}",
+                article_id=f"art_after_{i}",
+                content=f"Content after custom range {i}",
+                metadata={
+                    'date': date,
+                    'ministry': "Ministry of Health",
+                    'title': f"After Article {i}",
+                    'chunk_index': 0,
+                    'total_chunks': 1
+                }
+            )
+            chunks.append(chunk)
+        
+        # Generate embeddings and add to store
+        embeddings = embedding_generator.batch_generate_embeddings([c.content for c in chunks])
+        store.add_chunks(chunks, embeddings)
+        
+        # Search with custom date range filter
+        results = query_engine.search(
+            query=query_text,
+            date_range=(start_date.isoformat(), end_date.isoformat()),
+            max_articles=20,
+            relevance_threshold=0.0
+        )
+        
+        # Verify all results are within the custom date range
+        for result in results:
+            result_date = datetime.fromisoformat(result.chunk.metadata['date']).date()
+            assert start_date <= result_date <= end_date, \
+                f"Result date {result_date} not in custom range [{start_date}, {end_date}]"
     
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
